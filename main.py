@@ -5,7 +5,6 @@ from datetime import datetime
 import numpy as np
 from settings import Settings
 import pika
-from pika.exceptions import  StreamLostError
 from supabase import create_client, Client
 import schedule
 import os
@@ -14,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-room_id = 1
+room_id = Settings.ROOM_ID
 
 is_running = False
 
@@ -23,7 +22,7 @@ key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
 
-connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+connection = pika.BlockingConnection(pika.ConnectionParameters(Settings.QUEUE_URL))
 channel = connection.channel()
 print("[x] Created connection to queue")
 
@@ -56,8 +55,8 @@ def get_embeddings(course_id):
 def start(ordered_map, schedule_id):
     global is_running
     is_running = True
-    print("End Time:", datetime.now())
-    print("Found one schedule within 15 minutes")
+    print("[x] Starting Attendance Time:", datetime.now())
+    print("[x] Found one schedule within 15 minutes")
 
     cap = cv2.VideoCapture(0)
     end_time = time.time() + 15 * 60
@@ -70,11 +69,6 @@ def start(ordered_map, schedule_id):
         face_encodings = face_recognition.face_encodings(frame_rgb, face_locations)
         for location, encoding in zip(face_locations, face_encodings):
             match = face_recognition.compare_faces(ordered_map['encodings'], encoding, 0.4)
-            y1, x2, y2, x1 = location
-            y1, x2, y2, x1 = int(y1 * Settings.MULTIPLIER), int(x2 * Settings.MULTIPLIER),\
-                int(y2 * Settings.MULTIPLIER), int(x1 * Settings.MULTIPLIER)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
             for index, is_match in enumerate(match):
                 person_id = ordered_map['ids'][index]
                 if is_match and person_id not in people_id_marked:
@@ -83,9 +77,15 @@ def start(ordered_map, schedule_id):
                         people_id_marked.append(person_id)
                     else:
                         print(f"[x] Error pushing to queue")
-        cv2.imshow("Live Feed", frame)
-        if cv2.waitKey(10) == 27:
-            break
+                if Settings.SHOW_PREVIEW:
+                    y1, x2, y2, x1 = location
+                    y1, x2, y2, x1 = int(y1 * Settings.MULTIPLIER), int(x2 * Settings.MULTIPLIER), \
+                        int(y2 * Settings.MULTIPLIER), int(x1 * Settings.MULTIPLIER)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        if Settings.SHOW_PREVIEW:
+            cv2.imshow("Live Feed", frame)
+            if cv2.waitKey(10) == 27:
+                break
     is_running = False
 
 
@@ -102,7 +102,7 @@ def check_for_schedules():
         delta = schedule_time - datetime.now()
         if 0 < delta.total_seconds() < (15 * 60) and each['scheduled'] != 1:
             print(f"[x] Found a new schedule, starts at {schedule_time}, {each}")
-            print(delta.total_seconds() // 60)
+            print("[x] Minutes left to start", delta.total_seconds() // 60)
             ordered_map = get_embeddings(each['course'])
             u = supabase.table('class_schedule').update({'scheduled': 1}).eq('id', each['id']).execute()
             print("[x] Updated schedule status!")
